@@ -29,3 +29,29 @@ jobs:
 
       - name: Run trufflehog scan
         run: docker run --rm -v "$PWD:/repo" ghcr.io/trufflesecurity/trufflehog:latest git file:///repo --fail --no-update
+
+  notify-on-secret-found:
+    name: Notify on secret found
+    runs-on: ubuntu-latest
+    needs: [secret-scanning]
+    if: failure()
+
+    steps:
+      - name: Send email alert
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.NOTIFY_EMAIL }}
+          password: ${{ secrets.NOTIFY_EMAIL_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: Boston Needle Map <${{ secrets.NOTIFY_EMAIL }}>
+          subject: "⚠️ Secret detected in PR #${{ github.event.pull_request.number }}"
+          body: |
+            TruffleHog found a potential secret in a pull request.
+
+            PR: ${{ github.event.pull_request.title }}
+            Author: ${{ github.event.pull_request.user.login }}
+            Link: ${{ github.event.pull_request.html_url }}
+
+            Rotate any exposed credentials immediately, then close or fix the PR.
