@@ -200,6 +200,28 @@ def compute_stats(records: list[dict]) -> dict:
 
     years = sorted(set(r["year"] for r in records))
 
+    def bin_records(recs):
+        grid = defaultdict(int)
+        bs = 0.0008
+        for r in recs:
+            key = (round(r["lat"] / bs) * bs, round(r["lng"] / bs) * bs)
+            grid[key] += 1
+        return [[round(la, 6), round(lo, 6), c] for (la, lo), c in grid.items()]
+
+    # Pre-bin heat for every filter combo so the browser just looks up data
+    heat_keys = {"all": bin_records(records)}
+    for y in sorted(set(r["year"] for r in records)):
+        yr_recs = [r for r in records if r["year"] == y]
+        heat_keys[str(y)] = bin_records(yr_recs)
+        for m in range(1, 13):
+            mo_recs = [r for r in yr_recs if r["month"] == m]
+            if mo_recs:
+                heat_keys[f"{y}-{m:02d}"] = bin_records(mo_recs)
+    for m in range(1, 13):
+        mo_recs = [r for r in records if r["month"] == m]
+        if mo_recs:
+            heat_keys[f"all-{m:02d}"] = bin_records(mo_recs)
+
     # Compact point array for client-side filtering: [lat, lng, year, month]
     points = [[r["lat"], r["lng"], r["year"], r["month"]] for r in records]
 
@@ -248,6 +270,7 @@ def compute_stats(records: list[dict]) -> dict:
     return {
         "total": len(records),
         "years": years,
+        "heat_keys": heat_keys,
         "points": points,
         "hoods": hood_stats[:15],
         "hourly": hourly_data,
@@ -468,8 +491,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
 // ── Data ──────────────────────────────────────────────────────────────
-// POINTS: [lat, lng, year, month] — compact, filtered client-side
-const POINTS      = $POINTS_JSON;
+// HEAT_KEYS: pre-binned heat grids keyed by "all","YYYY","all-MM","YYYY-MM"
+const HEAT_KEYS   = $HEAT_KEYS_JSON;
 const MARKERS     = $MARKERS_JSON;
 const HOODS       = $HOODS_JSON;
 const HOURLY      = $HOURLY_JSON;
@@ -499,40 +522,38 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   subdomains: 'abcd', maxZoom: 19,
 }).addTo(map);
 
-// ── Heatmap ────────────────────────────────────────────────────────────
-const BIN = 0.0008;
+// ── Heatmap — uses pre-binned server data, no client computation ───────
+function heatKey(yr, mo) {
+  if (mo === 0) return yr === 'all' ? 'all' : String(yr);
+  const moPad = String(mo).padStart(2, '0');
+  return yr === 'all' ? `all-${moPad}` : `${yr}-${moPad}`;
+}
 
-function buildHeat(yr, mo) {
-  const grid = new Map();
-  let n = 0;
-  for (const [lat, lng, y, m] of POINTS) {
-    if (yr !== 'all' && y !== yr) continue;
-    if (mo !== 0 && m !== mo) continue;
-    const key = `${Math.round(lat/BIN)*BIN},${Math.round(lng/BIN)*BIN}`;
-    grid.set(key, (grid.get(key) || 0) + 1);
-    n++;
-  }
-  document.getElementById('count-val').textContent = n.toLocaleString();
-  const pts = [];
-  grid.forEach((count, key) => {
-    const [la, lo] = key.split(',').map(Number);
-    pts.push([la, lo, count]);
-  });
-  const sorted = pts.map(p => p[2]).sort((a,b)=>a-b);
-  const p95 = sorted[Math.floor(sorted.length * 0.95)] || 1;
+function makeHeatLayer(pts) {
+  const counts = pts.map(p => p[2]).sort((a,b) => a-b);
+  const p95 = counts[Math.floor(counts.length * 0.95)] || 1;
   return L.heatLayer(pts, {
     radius: 38, blur: 28, maxZoom: 16,
     max: p95, minOpacity: 0.4, gradient: GRADIENT,
   });
 }
 
-let heatLayer = buildHeat('all', 0);
+function getCount(yr, mo) {
+  const pts = HEAT_KEYS[heatKey(yr, mo)] || [];
+  return pts.reduce((s, p) => s + p[2], 0);
+}
+
+let heatLayer = makeHeatLayer(HEAT_KEYS['all'] || []);
 heatLayer.addTo(map);
+document.getElementById('count-val').textContent = getCount('all', 0).toLocaleString();
 
 function updateHeat() {
+  const key = heatKey(selYear, selMonth);
+  const pts = HEAT_KEYS[key] || [];
   map.removeLayer(heatLayer);
-  heatLayer = buildHeat(selYear, selMonth);
+  heatLayer = makeHeatLayer(pts);
   heatLayer.addTo(map);
+  document.getElementById('count-val').textContent = getCount(selYear, selMonth).toLocaleString();
 }
 
 // ── Filters ────────────────────────────────────────────────────────────
@@ -546,7 +567,7 @@ ALL_YEARS.forEach(yr => {
 });
 
 document.querySelectorAll('[name=yr]').forEach(r => {
-  r.addEventListener('change', () => { selYear = r.value === 'all' ? 'all' : +r.value; updateHeat(); updateTrendChart(); });
+  r.addEventListener('change', () => { selYear = r.value === 'all' ? 'all' : r.value; updateHeat(); updateTrendChart(); });
 });
 document.querySelectorAll('[name=mo]').forEach(r => {
   r.addEventListener('change', () => { selMonth = +r.value; updateHeat(); });
@@ -573,7 +594,7 @@ const YEAR_COLORS  = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f'];
 
 function buildTrendDatasets(filterYear) {
   return Object.entries(YEAR_MONTHLY)
-    .filter(([yr]) => filterYear === 'all' || +yr === filterYear)
+    .filter(([yr]) => filterYear === 'all' || yr === String(filterYear))
     .map(([yr, vals], i) => ({
       label: yr,
       data: vals,
@@ -675,13 +696,13 @@ def generate_html(stats: dict) -> str:
     html = html.replace("${PEAK_HOUR}", str(stats["peak_hour"]))
     html = html.replace("$PEAK_DOW", stats["peak_dow"])
     html = html.replace("$AVG_MONTHLY", str(stats["avg_monthly"]))
-    html = html.replace("$YEARS", ", ".join(str(y) for y in stats["years"]))
-    html = html.replace("$POINTS_JSON", json.dumps(stats["points"]))
     html = html.replace("$YEARS_JSON", json.dumps(stats["years"]))
+    html = html.replace("$YEAR_MONTHLY_JSON", json.dumps(stats["year_monthly"]))
+    html = html.replace("$YEARS", ", ".join(str(y) for y in stats["years"]))
+    html = html.replace("$HEAT_KEYS_JSON", json.dumps(stats["heat_keys"]))
     html = html.replace("$MARKERS_JSON", json.dumps(stats["markers"]))
     html = html.replace("$HOODS_JSON", json.dumps(stats["hoods"]))
     html = html.replace("$HOURLY_JSON", json.dumps(stats["hourly"]))
-    html = html.replace("$YEAR_MONTHLY_JSON", json.dumps(stats["year_monthly"]))
     html = html.replace("$ZIP_STATS_JSON", json.dumps(stats["zip_stats"]))
     return html
 
