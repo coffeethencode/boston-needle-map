@@ -1,0 +1,12 @@
+pre-commit:
+  parallel: true
+  commands:
+    ruff-check:
+      run: uv run ruff check src/ tests/
+      glob: "*.py"
+    ruff-format:
+      run: uv run ruff format --check src/ tests/
+      glob: "*.py"
+    mypy:
+      run: uv run mypy src/
+      glob: "*.py"

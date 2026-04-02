@@ -13,10 +13,10 @@ on:
         required: false
         default: ''
 
-  # Also run on pushes to main (for initial setup)
+  # Also run on pushes to main
   push:
     branches: [main]
-    paths: [pipeline.py]
+    paths: ['src/**', 'templates/**', 'pyproject.toml']
 
 permissions:
   contents: write
@@ -30,26 +30,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
 
       - name: Run pipeline
         run: |
           if [ -n "${{ github.event.inputs.years }}" ]; then
-            python pipeline.py ${{ github.event.inputs.years }}
+            uv run boston-needle-map run ${{ github.event.inputs.years }}
           else
-            python pipeline.py
+            uv run boston-needle-map run
           fi
 
       - name: Verify output
         run: |
           if [ ! -f docs/index.html ]; then
-            echo "❌ Pipeline did not produce docs/index.html"
+            echo "Pipeline did not produce docs/index.html"
             exit 1
           fi
-          echo "✅ docs/index.html exists ($(wc -c < docs/index.html) bytes)"
+          echo "docs/index.html exists ($(wc -c < docs/index.html) bytes)"
           ls -la docs/
 
       - name: Commit and push updated map
