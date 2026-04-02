@@ -8,6 +8,8 @@ Automated pipeline that pulls needle cleanup requests from Boston's 311 open dat
 ![Data](https://img.shields.io/badge/source-data.boston.gov-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+![Streamlit Dashboard](docs/images/streamlit-screenshot.png)
+
 ---
 
 ## How it works
